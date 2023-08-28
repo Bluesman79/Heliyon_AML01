@@ -1,0 +1,55 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import KFold
+from sklearn.metrics import (
+    roc_auc_score, accuracy_score, f1_score, confusion_matrix
+)
+from catboost import CatBoostClassifier
+
+def train_catboost(X_train, y_train, iters, lr, d, a, b):
+    clf = CatBoostClassifier(
+        iterations=iters,
+        learning_rate=lr,
+        depth=d,
+        random_seed=7,
+        bagging_temperature=1,
+        logging_level='Silent',
+        class_weights=[a, b],
+        task_type="GPU",
+        devices='0'
+    )
+    clf.fit(X_train, y_train)
+    return clf
+
+def evaluate_model(clf, X_test, y_test):
+    preds = clf.predict(X_test)
+    score = roc_auc_score(y_test, preds)
+    accuracy = accuracy_score(y_test, preds)
+    return preds, score, accuracy
+
+def model_cats_cv10(iters0, lr0, d0, a0, b0, train_name):
+    df = pd.read_csv(train_name)
+    df = df.sample(frac=1, random_state=7).reset_index(drop=True)  # Shuffling
+    X_train = df.drop('target', axis=1)
+    y_train = df['target']
+    
+    kf = KFold(n_splits=10, random_state=17, shuffle=True)
+    target_test_l, preds_l, roc_auc_scores_l, accu_l = [], [], [], []
+    
+    for train_index, test_index in kf.split(X_train):
+        data_train, target_train = X_train.iloc[train_index], y_train.iloc[train_index]
+        data_test, target_test = X_train.iloc[test_index], y_train.iloc[test_index]
+        
+        clf = train_catboost(data_train, target_train, iters0, lr0, d0, a0, b0)
+        preds, score, accuracy = evaluate_model(clf, data_test, target_test)
+        
+        target_test_l.extend(target_test)
+        preds_l.extend(preds)
+        roc_auc_scores_l.append(score)
+        accu_l.append(accuracy)
+    
+    cm = confusion_matrix(target_test_l, preds_l)
+    specificity = cm[0,0] / (cm[1,0] + cm[0,0])
+    sensitivity = cm[1,1] / (cm[1,1] + cm[0,1])
+    
+    return specificity, sensitivity, roc_auc_score(target_test_l, preds_l), f1_score(target_test_l, preds_l)
